@@ -21,9 +21,9 @@ Game Boy/Game Boy Color:
 * NHL Blades of Steel 2000
 * Warriors of Might and Magic
 
-Game Gear:
+Game Gear/Master System:
 * Chicago Syndicate
-* The Smurfs Travel the World (also on Master System)
+* The Smurfs Travel the World
 
 ## To do:
   * Support for the SNES (IMEDSNES) and MegaDrive (IMEDMega) module formats
