@@ -1,14 +1,16 @@
 /*Climax/Images Software (IMEDGBoy GB/GBC module, IMEDGear GG/SMS module) to MOD converter*/
 /*By Will Trowbridge*/
+/*RNC code by Robert Nothern Computing & Lab 313*/
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
+#include "RNC.H"
 
 #define bankSize 16384
 
-FILE* imed, *mod;
+FILE* imed, * mod, * rom, * cfg;
 long offset;
 long headerOffset;
 int i, j;
@@ -23,14 +25,32 @@ int numInst;
 int systemID;
 unsigned static char* imedData;
 unsigned static char* modData;
+unsigned static char* romData;
+unsigned static char* rncData;
+unsigned static char* cfgData;
 long imedLength;
 long modLength;
+long rncLength;
+int mode;
+int songNum;
+int numSongs;
+int fileExit;
+int exitError;
+int bank;
+long bankAmt;
+long base;
+long imedStart;
+long imedEnd;
+int compressed;
+int compSize;
 
 char* tempPnt;
 char OutFileBase[0x100];
 
+char* argv3;
+
 /*Header IDs*/
-const char gbID[8] = { 'I', 'M', 'E', 'D', 'G', 'B', 'o', 'y'};
+const char gbID[8] = { 'I', 'M', 'E', 'D', 'G', 'B', 'o', 'y' };
 const char ggID[8] = { 'I', 'M', 'E', 'D', 'G', 'e', 'a', 'r' };
 
 /*Note frequency table*/
@@ -41,7 +61,16 @@ int noteVals[60] = { 856, 808, 762, 720, 678, 640, 604, 570, 538, 508, 480, 453,
 53, 50, 47, 45, 42, 40, 37, 35, 33, 31, 30, 28 };
 
 /*Our sample*/
-const unsigned char sineWave[64] = { 0x00, 0x00, 0x00, 0x03, 0x06, 0x0A, 0x0E, 0x11, 0x15, 0x17, 0x1A, 0x1D, 0x20, 0x23, 0x27, 0x2A, 0x2C, 0x30, 0x33, 0x35, 0x38, 0x3B, 0x3E, 0x41, 0x43, 0x46, 0x4A, 0x4C, 0x4F, 0x52, 0x55, 0x58, 0x59, 0x59, 0x54, 0x4F, 0x4B, 0x48, 0x44, 0x41, 0x3E, 0x3B, 0x39, 0x37, 0x35, 0x33, 0x30, 0x2E, 0x2C, 0x29, 0x26, 0x22, 0x1F, 0x1B, 0x18, 0x12, 0x0B, 0x05, 0xFE, 0xF8, 0xF2, 0xEC, 0xE7, 0xE4};
+const unsigned char sineWave[64] = { 0x00, 0x00, 0x00, 0x03, 0x06, 0x0A, 0x0E, 0x11, 0x15, 0x17, 0x1A, 
+0x1D, 0x20, 0x23, 0x27, 0x2A, 0x2C, 0x30, 0x33, 0x35, 0x38, 0x3B, 0x3E, 0x41, 0x43, 0x46, 0x4A, 0x4C, 
+0x4F, 0x52, 0x55, 0x58, 0x59, 0x59, 0x54, 0x4F, 0x4B, 0x48, 0x44, 0x41, 0x3E, 0x3B, 0x39, 0x37, 0x35, 
+0x33, 0x30, 0x2E, 0x2C, 0x29, 0x26, 0x22, 0x1F, 0x1B, 0x18, 0x12, 0x0B, 0x05, 0xFE, 0xF8, 0xF2, 0xEC, 
+0xE7, 0xE4 };
+
+/*Strings to check in CFG (ROM mode)*/
+char string1[100];
+char string2[100];
+char checkStrings[6][100] = { "numSongs=", "bank=", "base=", "start=", "end=", "comp="};
 
 /*Function prototypes*/
 unsigned short ReadLE16(unsigned char* Data);
@@ -53,6 +82,7 @@ static void WriteLE16(unsigned char* buffer, unsigned int value);
 static void WriteLE24(unsigned char* buffer, unsigned long value);
 static void WriteLE32(unsigned char* buffer, unsigned long value);
 void imed2mod(long list, long dir);
+void copyData(unsigned char* source, unsigned char* dest, long base, long dataStart, long dataEnd);
 
 /*Convert little-endian pointer to big-endian*/
 unsigned short ReadLE16(unsigned char* Data)
@@ -122,76 +152,303 @@ static void WriteLE32(unsigned char* buffer, unsigned long value)
 int main(int args, char* argv[])
 {
 	printf("Climax/Images Software IMED module (GB/GBC/GG/SMS) to MOD converter\n");
-	if (args != 2)
+	if (args <= 2)
 	{
-		printf("Usage: IMED2MOD <module>\n");
+		printf("Usage: IMED2MOD <rom/module> <mode> <config (if ROM mode)>\n");
+		printf("Modes: M = Module (default), R = ROM\n");
 		return -1;
 	}
 	else
 	{
-		if ((imed = fopen(argv[1], "rb")) == NULL)
+		if (args == 2)
 		{
-			printf("ERROR: Unable to open file %s!\n", argv[1]);
-			exit(1);
+			mode = 1;
 		}
 		else
 		{
-
-			/*Copy filename from argument - based on code by ValleyBell*/
-			strcpy(OutFileBase, argv[1]);
-			tempPnt = strrchr(OutFileBase, '.');
-			if (tempPnt == NULL)
+			argv3 = argv[2];
+			if (strcmp(argv3, "m") == 0 || strcmp(argv3, "M") == 0)
 			{
-				tempPnt = OutFileBase + strlen(OutFileBase);
+				mode = 1;
 			}
-			*tempPnt = 0;
-
-			fseek(imed, 0, SEEK_END);
-			imedLength = ftell(imed);
-			fseek(imed, 0, SEEK_SET);
-			imedData = (unsigned char*)malloc(imedLength);
-			fread(imedData, 1, imedLength, imed);
-			fclose(imed);
-			if (!memcmp(&imedData[0], gbID, 8))
+			else if (strcmp(argv3, "r") == 0 || strcmp(argv3, "R") == 0)
 			{
-				printf("Detected format: Game Boy\n");
-				systemID = 1;
-				patList = ReadLE16(&imedData[8]);
-				printf("Pattern list offset: 0x%04X\n", patList);
-				patDir = ReadLE16(&imedData[10]);
-				printf("Pattern directory offset: 0x%04X\n", patDir);
-				chan12Data = ReadLE16(&imedData[12]);
-				printf("Channel 1 & 2 patch data: 0x%04X\n", chan12Data);
-				chan3Data = ReadLE16(&imedData[14]);
-				printf("Channel 3 patch data: 0x%04X\n", chan3Data);
-				waveTable = ReadLE16(&imedData[16]);
-				printf("Waveform table: 0x%04X\n", waveTable);
-				chan4Data = ReadLE16(&imedData[18]);
-				printf("Channel 4 patch data: 0x%04X\n", chan4Data);
-				imed2mod(patList, patDir);
-
-			}
-			else if (!memcmp(&imedData[0], ggID, 8))
-			{
-				printf("Detected format: Game Gear\n");
-				systemID = 2;
-				patList = ReadLE16(&imedData[8]);
-				printf("Pattern list offset: 0x%04X\n", patList);
-				patDir = ReadLE16(&imedData[10]);
-				printf("Pattern directory offset: 0x%04X\n", patDir);
-				chan12Data = ReadLE16(&imedData[12]);
-				printf("Patch data: 0x%04X\n", chan12Data);
-				numInst = imedData[14];
-				printf("Number of instruments: %i\n", numInst);
-				imed2mod(patList, patDir);
+				mode = 2;
 			}
 			else
 			{
-				printf("ERROR: Invalid or unsupported module format!\n");
-				exit(-1);
+				printf("ERROR: Invalid mode switch!\n");
+				exit(1);
 			}
 		}
-		printf("The operation was successfully completed!\n");
+
+		/*Module mode*/
+		if (mode == 1)
+		{
+			if ((imed = fopen(argv[1], "rb")) == NULL)
+			{
+				printf("ERROR: Unable to open file %s!\n", argv[1]);
+				exit(1);
+			}
+			else
+			{
+
+				/*Copy filename from argument - based on code by ValleyBell*/
+				strcpy(OutFileBase, argv[1]);
+				tempPnt = strrchr(OutFileBase, '.');
+				if (tempPnt == NULL)
+				{
+					tempPnt = OutFileBase + strlen(OutFileBase);
+				}
+				*tempPnt = 0;
+
+				fseek(imed, 0, SEEK_END);
+				imedLength = ftell(imed);
+				fseek(imed, 0, SEEK_SET);
+				imedData = (unsigned char*)malloc(imedLength);
+				fread(imedData, 1, imedLength, imed);
+				fclose(imed);
+				if (!memcmp(&imedData[0], gbID, 8))
+				{
+					printf("Detected format: Game Boy\n");
+					systemID = 1;
+					patList = ReadLE16(&imedData[8]);
+					printf("Pattern list offset: 0x%04X\n", patList);
+					patDir = ReadLE16(&imedData[10]);
+					printf("Pattern directory offset: 0x%04X\n", patDir);
+					chan12Data = ReadLE16(&imedData[12]);
+					printf("Channel 1 & 2 patch data: 0x%04X\n", chan12Data);
+					chan3Data = ReadLE16(&imedData[14]);
+					printf("Channel 3 patch data: 0x%04X\n", chan3Data);
+					waveTable = ReadLE16(&imedData[16]);
+					printf("Waveform table: 0x%04X\n", waveTable);
+					chan4Data = ReadLE16(&imedData[18]);
+					printf("Channel 4 patch data: 0x%04X\n", chan4Data);
+					imed2mod(patList, patDir);
+
+				}
+				else if (!memcmp(&imedData[0], ggID, 8))
+				{
+					printf("Detected format: Game Gear\n");
+					systemID = 2;
+					patList = ReadLE16(&imedData[8]);
+					printf("Pattern list offset: 0x%04X\n", patList);
+					patDir = ReadLE16(&imedData[10]);
+					printf("Pattern directory offset: 0x%04X\n", patDir);
+					chan12Data = ReadLE16(&imedData[12]);
+					printf("Patch data: 0x%04X\n", chan12Data);
+					numInst = imedData[14];
+					printf("Number of instruments: %i\n", numInst);
+					imed2mod(patList, patDir);
+				}
+				else
+				{
+					printf("ERROR: Invalid or unsupported module format!\n");
+					exit(-1);
+				}
+				printf("The operation was successfully completed!\n");
+			}
+		}
+		
+		/*ROM mode*/
+		else if (mode == 2)
+		{
+			if ((rom = fopen(argv[1], "rb")) == NULL)
+			{
+				printf("ERROR: Unable to open ROM file %s!\n", argv[1]);
+				exit(1);
+			}
+			else
+			{
+				if ((cfg = fopen(argv[3], "r")) == NULL)
+				{
+					printf("ERROR: Unable to open configuration file %s!\n", argv[3]);
+					exit(1);
+				}
+				else
+				{
+					fileExit = 0;
+					exitError = 0;
+					songNum = 1;
+
+					/*Get the total number of songs*/
+					fgets(string1, 10, cfg);
+
+					if (memcmp(string1, checkStrings[0], 1))
+					{
+						printf("ERROR: Invalid CFG data!\n");
+						exit(1);
+
+					}
+					fgets(string1, 3, cfg);
+					numSongs = strtod(string1, NULL);
+					printf("Total # of songs: %i\n", numSongs);
+
+
+
+					/*Repeat for every song*/
+					while (fileExit == 0 && exitError == 0)
+					{
+						if (songNum > numSongs)
+						{
+							fileExit = 1;
+						}
+
+						if (fileExit == 0)
+						{
+							/*Skip new line*/
+							fgets(string1, 2, cfg);
+							/*Skip the first line*/
+							fgets(string1, 10, cfg);
+
+							/*Get the bank of each song*/
+							fgets(string1, 6, cfg);
+							if (memcmp(string1, checkStrings[1], 1))
+							{
+								exitError = 1;
+							}
+							fgets(string1, 5, cfg);
+							{
+								bank = strtol(string1, NULL, 16);
+							}
+
+							printf("Song %i, Bank: %01X\n", songNum, bank);
+
+							/*Copy the ROM's bank data into RAM*/
+							if (bank != 1)
+							{
+								bankAmt = bankSize;
+								fseek(rom, ((bank - 1) * bankSize), SEEK_SET);
+								romData = (unsigned char*)malloc(bankSize);
+								fread(romData, 1, bankSize, rom);
+							}
+
+							else
+							{
+								bankAmt = 0;
+								fseek(rom, ((bank - 1) * bankSize * 2), SEEK_SET);
+								romData = (unsigned char*)malloc(bankSize * 2);
+								fread(romData, 1, bankSize * 2, rom);
+							}
+
+							/*Skip new line*/
+							fgets(string1, 2, cfg);
+
+							/*Now look for the "base"*/
+							fgets(string1, 6, cfg);
+							if (memcmp(string1, checkStrings[2], 1))
+							{
+								exitError = 1;
+							}
+							fgets(string1, 5, cfg);
+							base = strtol(string1, NULL, 16);
+							printf("Song %i, Base: 0x%04X\n", songNum, base);
+
+							/*Skip new line*/
+							fgets(string1, 2, cfg);
+
+							/*Get the "start" of the module*/
+							fgets(string1, 7, cfg);
+							if (memcmp(string1, checkStrings[3], 1))
+							{
+								exitError = 1;
+							}
+							fgets(string1, 5, cfg);
+							imedStart = strtol(string1, NULL, 16);
+							printf("Song %i, Start: 0x%04X\n", songNum, imedStart);
+
+							/*Skip new line*/
+							fgets(string1, 2, cfg);
+
+							/*Get the "end" of the module*/
+							fgets(string1, 5, cfg);
+							if (memcmp(string1, checkStrings[4], 1))
+							{
+								exitError = 1;
+							}
+							fgets(string1, 5, cfg);
+							imedEnd = strtol(string1, NULL, 16);
+							printf("Song %i, End: 0x%04X\n", songNum, imedEnd);
+
+							/*Skip new line*/
+							fgets(string1, 2, cfg);
+
+							/*Check if the module is compressed*/
+							fgets(string1, 6, cfg);
+							if (memcmp(string1, checkStrings[5], 1))
+							{
+								exitError = 1;
+							}
+							fgets(string1, 5, cfg);
+							compressed = strtol(string1, NULL, 16);
+							if (compressed == 0)
+							{
+								printf("Song %i is uncompressed\n", songNum);
+								copyData(romData, imedData, base, imedStart, imedEnd);
+							}
+							else if (compressed == 1)
+							{
+								printf("Song %i is compressed (RNC)\n", songNum);
+								rncData = (unsigned char*)malloc(0x4000);
+								copyData(romData, rncData, base, imedStart, imedEnd);
+								imedData = (unsigned char*)malloc(0x4000);
+								compSize = imedEnd - imedStart + 1;
+								procRNC(rncData, imedData, compSize);
+
+							}
+							else
+							{
+								exitError = 1;
+							}
+
+							if (!memcmp(&imedData[0], gbID, 8))
+							{
+								printf("Detected format: Game Boy\n");
+								systemID = 1;
+								patList = ReadLE16(&imedData[8]);
+								printf("Pattern list offset: 0x%04X\n", patList);
+								patDir = ReadLE16(&imedData[10]);
+								printf("Pattern directory offset: 0x%04X\n", patDir);
+								chan12Data = ReadLE16(&imedData[12]);
+								printf("Channel 1 & 2 patch data: 0x%04X\n", chan12Data);
+								chan3Data = ReadLE16(&imedData[14]);
+								printf("Channel 3 patch data: 0x%04X\n", chan3Data);
+								waveTable = ReadLE16(&imedData[16]);
+								printf("Waveform table: 0x%04X\n", waveTable);
+								chan4Data = ReadLE16(&imedData[18]);
+								printf("Channel 4 patch data: 0x%04X\n", chan4Data);
+								imed2mod(patList, patDir);
+
+							}
+							else if (!memcmp(&imedData[0], ggID, 8))
+							{
+								printf("Detected format: Game Gear\n");
+								systemID = 2;
+								patList = ReadLE16(&imedData[8]);
+								printf("Pattern list offset: 0x%04X\n", patList);
+								patDir = ReadLE16(&imedData[10]);
+								printf("Pattern directory offset: 0x%04X\n", patDir);
+								chan12Data = ReadLE16(&imedData[12]);
+								printf("Patch data: 0x%04X\n", chan12Data);
+								numInst = imedData[14];
+								printf("Number of instruments: %i\n", numInst);
+								imed2mod(patList, patDir);
+							}
+							else
+							{
+								printf("ERROR: Invalid or unsupported module format!\n");
+								exit(-1);
+							}
+
+							songNum++;
+						}
+					}
+
+					fclose(rom);
+					printf("The operation was successfully completed!\n");
+				}
+			}
+		}
 	}
 }
 
@@ -223,10 +480,26 @@ void imed2mod(long list, long dir)
 	{
 		modData[i] = 0;
 	}
-	sprintf(outfile, "%s_converted.mod", OutFileBase);
+
+	if (mode == 1)
+	{
+		sprintf(outfile, "%s_converted.mod", OutFileBase);
+	}
+	else
+	{
+		sprintf(outfile, "song%i.mod", songNum);
+	}
 	if ((mod = fopen(outfile, "wb")) == NULL)
 	{
-		printf("ERROR: Unable to write to file %s_converted.mod!\n", OutFileBase);
+		if (mode == 1)
+		{
+			printf("ERROR: Unable to write to file %s_converted.mod!\n", OutFileBase);
+		}
+		else
+		{
+			printf("ERROR: Unable to write to file song%i.mod!\n", songNum);
+		}
+
 		exit(2);
 	}
 	else
@@ -290,12 +563,12 @@ void imed2mod(long list, long dir)
 
 		/*Now for the actual pattern data...*/
 		curPtr = dir;
-		for (curPat = 0; curPat < highestPos+1; curPat++)
+		for (curPat = 0; curPat < highestPos + 1; curPat++)
 		{
 			curPtr = dir + ReadLE16(&imedData[dir + (curPat * 2)]);
 			nextPtr = dir + ReadLE16(&imedData[dir + (curPat * 2)] + 2);
 			imedPos = curPtr;
-			
+
 			while (imedPos < nextPtr)
 			{
 				/*Get the current channel mask*/
@@ -424,7 +697,7 @@ void imed2mod(long list, long dir)
 				/*Channel 3 note*/
 				if (curPattern[8] != 0)
 				{
-					curNote = noteVals[curPattern[8] - 13];
+					curNote = noteVals[curPattern[8] - 1];
 					WriteBE16(&modData[modPos], curNote);
 				}
 				else if (curPattern[8] == 0)
@@ -526,4 +799,38 @@ void imed2mod(long list, long dir)
 		fwrite(modData, modPos, 1, mod);
 		fclose(mod);
 	}
+}
+
+/*Copy the module data from ROM*/
+void copyData(unsigned char* source, unsigned char* dest, long base, long dataStart, long dataEnd)
+{
+	int k = dataStart;
+	int l = 0;
+
+	if (compressed == 0)
+	{
+		imedLength = dataEnd - dataStart;
+		imedData = (unsigned char*)malloc(imedLength);
+
+		while (k <= dataEnd)
+		{
+			imedData[l] = romData[k - base];
+			k++;
+			l++;
+		}
+	}
+	else
+	{
+		rncLength = dataEnd - dataStart;
+		rncData = (unsigned char*)malloc(rncLength);
+		imedData = (unsigned char*)malloc(imedLength);
+
+		while (k <= dataEnd)
+		{
+			rncData[l] = romData[k - base];
+			k++;
+			l++;
+		}
+	}
+	free(romData);
 }
